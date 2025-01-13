@@ -44,12 +44,20 @@ def read_page(page: str) -> dict:
         }
     }
 
+def process_single_book(book_link: str, UPC_library: dict, lock: Lock) -> None:
+    page = fetch_page(book_link)
+    result = read_page(page)
+    with lock:
+        UPC_library.update(result)
+
 def process_books(book_links: list, UPC_library: dict, lock: Lock) -> None:
-    for book_link in (book_links):
-        page = fetch_page(book_link)
-        result = read_page(page)
-        with lock:
-            UPC_library.update(result)
+    with ThreadPoolExecutor(max_workers=len(book_links)) as book_executor:
+        futures = []
+        for link in book_links:
+            book_executor.submit(process_single_book, link, UPC_library, lock)
+        
+        for future in (futures):
+            future.result()
 
 def process_category(category_url: str, UPC_library: dict, lock: Lock) -> None:
     html = fetch_page(category_url)
@@ -74,9 +82,8 @@ def main() -> None:
         for category_link in category_links:
             executor.submit(process_category, category_link, UPC_library, lock)
         
-        
         for i, future in enumerate(futures):
-            print(f"{i}/{len(category_links)}")
+            # print(f"{i}/{len(category_links)}")
             future.result()
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
