@@ -4,64 +4,85 @@ from bs4 import BeautifulSoup
 import json
 from tqdm import tqdm
 
-# Duomenų rinkimo funkcija
+MAIN_URL = "http://books.toscrape.com"
+OUTPUT_FILE = "books_lib.json"
+
 async def fetch_page(session: aiohttp.ClientSession, url: str) -> str:
     async with session.get(url) as response:
         return await response.text()
 
-
-# Duomenų ištraukimas pagal schemą
-async def parse_book(html: str) -> dict:
+async def get_category_links(session: aiohttp.ClientSession) -> list:
+    html = await fetch_page(session, MAIN_URL)
     soup = BeautifulSoup(html, "html.parser")
+    category_links = soup.select("div.side_categories ul > li > ul > li > a")
+    return [f'{MAIN_URL}/{a["href"]}' for a in category_links]
+
+async def get_book_links(html: str) -> list:
+    soup = BeautifulSoup(html, "html.parser")
+    book_links = []
+    for a in soup.select("h3 a"):
+        book_url = a["href"].replace("../../../", "")
+        book_links.append(f'{MAIN_URL}/catalogue/{book_url}')
+    return book_links
+
+async def read_page(session: aiohttp.ClientSession, url: str) -> dict:
+    page = await fetch_page(session, url)
+    soup = BeautifulSoup(page, "html.parser")
     name = soup.find("h1").text.strip()
-    table = soup.find("table", {"class": "table table-striped"})
-    data = {row.find("th").text: row.find("td").text.strip() for row in table.find_all("tr")}
-    
-    availability = soup.find("p", {"class": "instock availability"}).text.strip()
+    UPC = soup.select("table tr")[0].select("td")[0].text.strip()
+    price = soup.select("table tr")[2].select("td")[0].text.strip()
+    tax = soup.select("table tr")[4].select("td")[0].text.strip()
+    availability = soup.select("table tr")[5].select("td")[0].text.strip()
+
     return {
-        "Name": name,
-        "UPC": data.get("UPC", ""),
-        "Price (excl. tax)": data.get("Price (excl. tax)", ""),
-        "Tax": data.get("Tax", ""),
-        "Availability": availability,
+        UPC: {
+            "Name": name,
+            "UPC": UPC,
+            "Price (excl. tax)": price,
+            "Tax": tax,
+            "Availability": availability,
+        }
     }
 
+async def process_books(session: aiohttp.ClientSession, book_links: list, UPC_library: dict, lock: asyncio.Lock):
+    tasks = []
+    for book_link in book_links:
+        tasks.append(read_page(session, book_link))
 
-# Puslapio apdorojimas
-async def process_page(session: aiohttp.ClientSession, url: str) -> list:
-    html = await fetch_page(session, url)
-    soup = BeautifulSoup(html, "html.parser")
-    book_links = [a["href"] for a in soup.select("h3 a")]
-    book_urls = [f"http://books.toscrape.com/catalogue/{link}" for link in (book_links)]
+    results = await asyncio.gather(*tasks)
+    async with lock:
+        for result in results:
+            UPC_library.update(result)
 
-    tasks = [fetch_page(session, book_url) for book_url in book_urls]
-    book_pages = await asyncio.gather(*tasks)
+async def process_category(session: aiohttp.ClientSession, category_url: str, UPC_library: dict, lock: asyncio.Lock):
+    html = await fetch_page(session, category_url)
+    book_links = await get_book_links(html)
+    await process_books(session, book_links, UPC_library, lock)
 
-    parse_tasks = [parse_book(page) for page in book_pages]
-    return await asyncio.gather(*parse_tasks)
+    i = 1
+    while "next" in html:
+        i += 1
+        next_books_link = category_url.replace("index.html", f"page-{i}.html")
+        html = await fetch_page(session, next_books_link)
+        book_links = await get_book_links(html)
+        await process_books(session, book_links, UPC_library, lock)
 
-
-# Pagrindinė funkcija
 async def main():
-    base_url = "http://books.toscrape.com/catalogue/page-{}.html"
-    results = []
-    seen = set()
-
     async with aiohttp.ClientSession() as session:
-        for page in tqdm(range(1, 51)):  # Tikriname pirmus 2 puslapius kaip pavyzdį
-            url = base_url.format(page)
-            books = await process_page(session, url)
+        category_links = await get_category_links(session)
+        UPC_library = {}
+        lock = asyncio.Lock()
 
-            # Validacija ir duomenų deduplicavimas
-            for book in books:
-                if book["UPC"] not in seen:
-                    seen.add(book["UPC"])
-                    results.append(book)
+        tasks = [
+            process_category(session, category_link, UPC_library, lock)
+            for category_link in category_links
+        ]
 
-    # Duomenų išsaugojimas JSON faile
-    with open("books_data.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+        for _ in tqdm(asyncio.as_completed(tasks), total=len(tasks)):
+            await _
 
+        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+            json.dump(UPC_library, f, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
     asyncio.run(main())
