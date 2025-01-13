@@ -25,7 +25,7 @@ async def get_book_links(html: str) -> list:
         book_links.append( f'{MAIN_URL}./catalogue/{book_url}' )
     return book_links
 
-def read_page(page, UPC_library):
+def read_page(page: str, UPC_library: dict) -> None:
     soup = BeautifulSoup(page, "html.parser")
     name = soup.find("h1").text.strip()
     UPC = soup.select("table tr")[0].select("td")[0].text.strip()
@@ -41,7 +41,7 @@ def read_page(page, UPC_library):
             "Availability": availability,
         }
 
-async def scrap_books(UPC_library, session, html):
+async def scrap_books(UPC_library: dict, session: aiohttp.ClientSession, html: str) -> None:
     book_links = await get_book_links(html)
     for book_link in tqdm(book_links):
         async with aiohttp.ClientSession() as session:
@@ -49,7 +49,7 @@ async def scrap_books(UPC_library, session, html):
             read_page(page, UPC_library)
             
             
-async def main():
+async def main() -> None:
     async with aiohttp.ClientSession() as session:
         category_links = await get_category_links(session)
         UPC_library = {}
