@@ -79,11 +79,15 @@ def main() -> None:
     
     with ThreadPoolExecutor(max_workers=len(category_links)) as executor:
         futures = []
-        for category_link in category_links:
-            executor.submit(process_category, category_link, UPC_library, lock)
-        
-        for i, future in enumerate(futures):
-            # print(f"{i}/{len(category_links)}")
+        # for category_link in category_links:
+        #     executor.submit(process_category, category_link, UPC_library, lock)
+        for category_link in tqdm(category_links, desc="Processing Categories"):
+            futures.append(executor.submit(process_category, category_link, UPC_library, lock))
+
+        # for i, future in tqdm(enumerate(futures)):
+        #     # print(f"{i}/{len(category_links)}")
+        #     future.result()
+        for future in tqdm(futures, desc="Finalizing Tasks", total=len(futures)):
             future.result()
 
     with open(OUTPUT_FILE, "w", encoding="utf-8") as f:

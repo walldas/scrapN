@@ -5,7 +5,7 @@ import json
 from tqdm import tqdm
 
 MAIN_URL = "http://books.toscrape.com"
-OUTPUT_FILE = "books_lib.json"
+OUTPUT_FILE = "books_data.json"
 
 async def fetch_page(session: aiohttp.ClientSession, url: str) -> str:
     async with session.get(url) as response:
