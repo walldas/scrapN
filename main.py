@@ -1,31 +1,32 @@
-import asyncio
-import aiohttp
+import requests
 from bs4 import BeautifulSoup
 import json
 from tqdm import tqdm
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 MAIN_URL = "http://books.toscrape.com"
 OUTPUT_FILE = "books_lib.json"
 
-async def fetch_page(session: aiohttp.ClientSession, url: str) -> str:
-    async with session.get(url) as response:
-        return await response.text()
+def fetch_page(url: str) -> str:
+    response = requests.get(url)
+    return response.text
     
-async def get_category_links(session: aiohttp.ClientSession) -> list:
-    html = await fetch_page(session, MAIN_URL)
+def get_category_links() -> list:
+    html = fetch_page(MAIN_URL)
     soup = BeautifulSoup(html, "html.parser")
     category_links = soup.select("div.side_categories ul > li > ul > li > a")
     return [f'{MAIN_URL}/{a["href"]}' for a in category_links]
 
-async def get_book_links(html: str) -> list:
+def get_book_links(html: str) -> list:
     soup = BeautifulSoup(html, "html.parser")
     book_links = []
     for a in soup.select("h3 a"):
         book_url = a["href"].replace("../../../", "")
-        book_links.append( f'{MAIN_URL}./catalogue/{book_url}' )
+        book_links.append(f'{MAIN_URL}/catalogue/{book_url}')
     return book_links
 
-def read_page(page: str, UPC_library: dict) -> None:
+def read_page(page: str) -> dict:
     soup = BeautifulSoup(page, "html.parser")
     name = soup.find("h1").text.strip()
     UPC = soup.select("table tr")[0].select("td")[0].text.strip()
@@ -33,46 +34,53 @@ def read_page(page: str, UPC_library: dict) -> None:
     tax = soup.select("table tr")[4].select("td")[0].text.strip()
     availability = soup.select("table tr")[5].select("td")[0].text.strip()
 
-    UPC_library[UPC] = {
+    return {
+        UPC: {
             "Name": name,
             "UPC": UPC,
             "Price (excl. tax)": price,
             "Tax": tax,
             "Availability": availability,
         }
+    }
 
-async def scrap_books(UPC_library: dict, session: aiohttp.ClientSession, html: str) -> None:
-    book_links = await get_book_links(html)
-    for book_link in tqdm(book_links):
-        async with aiohttp.ClientSession() as session:
-            page = await fetch_page(session, book_link)
-            read_page(page, UPC_library)
-            
-            
-async def main() -> None:
-    async with aiohttp.ClientSession() as session:
-        category_links = await get_category_links(session)
-        UPC_library = {}
-        for i, category_link in enumerate(category_links):
-            print(f"{i}/{len(category_links)}", category_link)
+def process_books(book_links: list, UPC_library: dict, lock: Lock) -> None:
+    for book_link in (book_links):
+        page = fetch_page(book_link)
+        result = read_page(page)
+        with lock:
+            UPC_library.update(result)
 
-            html = await fetch_page(session, category_link)
-            await scrap_books(UPC_library, session, html)
+def process_category(category_url: str, UPC_library: dict, lock: Lock) -> None:
+    html = fetch_page(category_url)
+    book_links = get_book_links(html)
+    process_books(book_links, UPC_library, lock)
+    
+    i = 1
+    while html.find("next") != -1:
+        i += 1
+        next_books_link = category_url.replace("index.html", f"page-{i}.html")
+        html = fetch_page(next_books_link)
+        book_links = get_book_links(html)
+        process_books(book_links, UPC_library, lock)
 
-            i = 1
-            while html.find("next") != -1:
-                i += 1
-                next_books_link = category_link.replace("index.html", f"page-{i}.html")
-                print(next_books_link)
-                
-                html = await fetch_page(session, next_books_link)
-                await scrap_books(UPC_library, session, html)
+def main() -> None:
+    category_links = get_category_links()
+    UPC_library = {}
+    lock = Lock()
+    
+    with ThreadPoolExecutor(max_workers=len(category_links)) as executor:
+        futures = []
+        for category_link in category_links:
+            executor.submit(process_category, category_link, UPC_library, lock)
+        
+        
+        for i, future in enumerate(futures):
+            print(f"{i}/{len(category_links)}")
+            future.result()
 
-
-
-        with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(UPC_library, f, ensure_ascii=False, indent=4)
-
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+        json.dump(UPC_library, f, ensure_ascii=False, indent=4)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

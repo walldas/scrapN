@@ -4,7 +4,7 @@
 ## Preparation
 - install miniconda to yuor device
 - open cmd.exe in scraping folder
-- create virtual enviroment enter in cmd "conda create --name scrap python=3.9 aiohttp beautifulsoup4 tqdm"
+- create virtual enviroment enter in cmd "conda create --name scrap python=3.9 aiohttp beautifulsoup4 tqdm requests"
 
 ## Usage
 - enter in cmd "conda activate scrap"
